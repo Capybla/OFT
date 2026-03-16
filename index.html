@@ -13,13 +13,13 @@
 <input type="file" id="fileInput">
 <button id="startTxBtn">Iniciar transmisión</button>
 <button id="stopTxBtn">Parar transmisión</button>
+<select id="cameraSelect"></select>
 <br><br>
 <canvas id="txCanvas" width="400" height="400"></canvas>
 
 <hr>
 
-<button id="startRxBtn">Abrir cámara receptor</button>
-<video id="video" width="400" height="300" autoplay></video>
+<video id="video" width="400" height="300" autoplay playsinline></video>
 <div id="output"></div>
 
 <script src="script.js"></script>
