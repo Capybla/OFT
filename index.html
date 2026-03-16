@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Optical File Transfer - GitHub Pages Ready</title>
+<style>
+body { background:#111; color:white; font-family:monospace; text-align:center; }
+canvas, video { border:2px solid white; margin-top:20px; }
+#output { margin-top:20px; word-break:break-all; white-space:pre-wrap; max-width:90%; margin-left:auto;margin-right:auto; }
+button,input { margin-top:10px; }
+</style>
+</head>
+<body>
+
+<h1>Optical File Transfer</h1>
+
+<input type="file" id="fileInput">
+<button onclick="startTransmit()">Transmitir</button>
+<br><br>
+<canvas id="txCanvas" width="400" height="400"></canvas>
+
+<hr>
+
+<button onclick="startCamera()">Abrir Cámara Receptor</button>
+<video id="video" width="400" height="300" autoplay></video>
+<div id="output"></div>
+
+<script>
+// ======== TRANSMIT ========
+let encoded = '';
+let chunkSize = 512; // bytes por bloque
+let index = 0;
+let intervalId;
+let totalChunks = 0;
+let fileName = '';
+
+function startTransmit(){
+    const file = document.getElementById('fileInput').files[0];
+    if(!file){ alert('Selecciona un archivo'); return; }
+    fileName = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+        encoded = btoa(reader.result); // Base64
+        index = 0;
+        totalChunks = Math.ceil(encoded.length/chunkSize);
+        intervalId = setInterval(drawChunk, 100); // 10 fps
+    };
+    reader.readAsBinaryString(file);
+}
+
+function drawChunk(){
+    const canvas = document.getElementById('txCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle='black';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='lime';
+    ctx.font='10px monospace';
+    let chunk = encoded.substring(index,index+chunkSize);
+    wrapText(ctx,chunk,10,20,380,12);
+    index += chunkSize;
+    if(index >= encoded.length) index = 0;
+}
+
+function wrapText(ctx,text,x,y,maxWidth,lineHeight){
+    let line='';
+    for(let i=0;i<text.length;i++){
+        const testLine = line+text[i];
+        if(ctx.measureText(testLine).width>maxWidth){
+            ctx.fillText(line,x,y);
+            line=text[i];
+            y+=lineHeight;
+        } else line=testLine;
+    }
+    ctx.fillText(line,x,y);
+}
+
+// ======== RECEIVE ========
+let receivedChunks = [];
+let receiving = false;
+
+async function startCamera(){
+    const video = document.getElementById('video');
+    const stream = await navigator.mediaDevices.getUserMedia({video:true});
+    video.srcObject = stream;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    function captureFrame(){
+        if(video.videoWidth===0 || receiving){ requestAnimationFrame(captureFrame); return; }
+        receiving = true;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video,0,0);
+        const frame = ctx.getImageData(0,0,canvas.width,canvas.height);
+        const chunk = decodeFrame(frame);
+        if(chunk){
+            receivedChunks.push(chunk);
+            document.getElementById("output").innerText = `Recibiendo ${receivedChunks.length} bloques...`;
+        }
+        if(receivedChunks.length >= totalChunks && totalChunks>0){
+            reconstructFile();
+            clearInterval(intervalId);
+        }
+        receiving = false;
+        requestAnimationFrame(captureFrame);
+    }
+    captureFrame();
+}
+
+function decodeFrame(frame){
+    // Leer solo pixeles verdes como datos (placeholder para codificación QR)
+    const data = frame.data;
+    let chars='';
+    for(let i=0;i<data.length;i+=4*2){
+        const g = data[i+1], r=data[i], b=data[i+2];
+        if(g>100 && g>r && g>b){
+            chars += 'A'; // placeholder
+        }
+    }
+    return chars;
+}
+
+function reconstructFile(){
+    try{
+        let data = receivedChunks.join('');
+        const binary = atob(data);
+        const buffer = new Uint8Array(binary.length);
+        for(let i=0;i<binary.length;i++) buffer[i] = binary.charCodeAt(i);
+        const blob = new Blob([buffer]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName || 'archivo_recibido';
+        a.innerText = 'Descargar archivo recibido';
+        document.getElementById('output').appendChild(document.createElement('br'));
+        document.getElementById('output').appendChild(a);
+    }catch(e){
+        console.error('Error reconstruyendo archivo',e);
+    }
+}
+</script>
+
+</body>
+</html>
