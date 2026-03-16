@@ -19,11 +19,48 @@ let rxBytes = [];
 let receiving = false;
 let finished = false;
 
-// CANVAS DE TRANSMISIÓN
 const txCanvas = document.getElementById('txCanvas');
 const txCtx = txCanvas.getContext('2d');
 
-// BOTONES
+const video = document.getElementById('video');
+const cameraSelect = document.getElementById('cameraSelect');
+
+// RELLENAR SELECTOR DE CAMARAS
+async function listCameras(){
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    cameraSelect.innerHTML = '';
+    devices.filter(d=>d.kind==='videoinput').forEach((device, i)=>{
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.text = device.label || `Cámara ${i+1}`;
+        cameraSelect.appendChild(option);
+    });
+}
+listCameras();
+
+// INICIAR CÁMARA AUTOMÁTICA
+async function startCamera(deviceId=null){
+    if(video.srcObject){
+        video.srcObject.getTracks().forEach(track=>track.stop());
+    }
+    const constraints = {
+        video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" }
+    };
+    try{
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+    }catch(e){
+        console.error("Error cámara:", e);
+    }
+}
+
+// CAMBIO DE CÁMARA
+cameraSelect.onchange = ()=>startCamera(cameraSelect.value);
+
+// INICIAR CÁMARA AL ABRIR LA WEB
+startCamera();
+
+// BOTONES TRANSMISOR
 document.getElementById('startTxBtn').onclick = () => {
     const file = document.getElementById('fileInput').files[0];
     if(!file){ alert("Selecciona un archivo"); return; }
@@ -46,9 +83,7 @@ document.getElementById('startTxBtn').onclick = () => {
     reader.readAsArrayBuffer(file);
 };
 
-document.getElementById('stopTxBtn').onclick = () => {
-    clearInterval(txInterval);
-};
+document.getElementById('stopTxBtn').onclick = () => clearInterval(txInterval);
 
 // DIBUJA FRAME
 function drawNextFrame(){
@@ -66,37 +101,28 @@ function drawNextFrame(){
     if(txIndex >= encodedData.length) txIndex = 0;
 }
 
-// RECEPCIÓN
-document.getElementById('startRxBtn').onclick = async () => {
-    finished = false;
-    rxBytes = [];
-    const video = document.getElementById('video');
-    const stream = await navigator.mediaDevices.getUserMedia({video:true});
-    video.srcObject = stream;
-
+// RECEPCIÓN AUTOMÁTICA
+function capture(){
+    if(video.videoWidth===0 || receiving || finished){ requestAnimationFrame(capture); return; }
+    receiving = true;
     const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
-
-    function capture(){
-        if(video.videoWidth===0 || receiving || finished){ requestAnimationFrame(capture); return; }
-        receiving = true;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video,0,0);
-        const frame = ctx.getImageData(0,0,canvas.width,canvas.height);
-        const chunk = decodeFrame(frame);
-        if(chunk.length>0){
-            for(let b of chunk){
-                if(b===255){ finished=true; reconstructFile(); break; }
-                else rxBytes.push(b);
-            }
-            document.getElementById('output').innerText = `Recibiendo ${rxBytes.length} bytes...`;
+    ctx.drawImage(video,0,0);
+    const frame = ctx.getImageData(0,0,canvas.width,canvas.height);
+    const chunk = decodeFrame(frame);
+    if(chunk.length>0){
+        for(let b of chunk){
+            if(b===255){ finished=true; reconstructFile(); break; }
+            else rxBytes.push(b);
         }
-        receiving = false;
-        requestAnimationFrame(capture);
+        document.getElementById('output').innerText = `Recibiendo ${rxBytes.length} bytes...`;
     }
-    capture();
-};
+    receiving = false;
+    requestAnimationFrame(capture);
+}
+requestAnimationFrame(capture);
 
 // DECODIFICACIÓN DE FRAME
 function decodeFrame(frame){
