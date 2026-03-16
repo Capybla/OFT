@@ -1,0 +1,4 @@
+body { background:#111; color:white; font-family:monospace; text-align:center; margin:0; }
+canvas, video { border:2px solid white; margin-top:20px; max-width:90vw; height:auto; }
+#output { margin-top:20px; word-break:break-all; white-space:pre-wrap; max-width:90%; margin:auto; }
+button,input { margin:5px; padding:10px; font-size:16px; }
