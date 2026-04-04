@@ -239,13 +239,14 @@
     <section class="grid">
       <article class="panel">
         <h2>Emisor</h2>
-        <p class="subtle">Selecciona un archivo y la pagina lo fragmentara en QR consecutivos para que otro dispositivo pueda escanearlos.</p>
+        <p class="subtle">Selecciona un archivo y la pagina lo fragmentara en patrones opticos consecutivos para que otro dispositivo pueda escanearlos.</p>
         <div class="controls">
           <input type="file" id="fileInput">
           <select id="txProfile">
             <option value="balanced">Balanceado</option>
             <option value="robust">Robusto</option>
             <option value="turbo">Turbo</option>
+            <option value="ultra">Ultra RGB</option>
           </select>
           <button class="primary" id="transmitBtn">Iniciar transmision</button>
           <button class="danger" id="stopTransmitBtn">Detener</button>
@@ -288,7 +289,7 @@
         <div class="receiver-meta">
           <div class="stat">
             <span class="label">Archivo detectado</span>
-            <span class="value" id="rxFileName">Esperando QR...</span>
+            <span class="value" id="rxFileName">Esperando patron...</span>
           </div>
           <div class="stat">
             <span class="label">Progreso</span>
@@ -350,8 +351,13 @@
     const TX_PROFILES = {
       robust: { chunkSize: 110, frameInterval: 320, repeatCount: 3, label: "Robusto" },
       balanced: { chunkSize: 160, frameInterval: 220, repeatCount: 2, label: "Balanceado" },
-      turbo: { chunkSize: 220, frameInterval: 140, repeatCount: 1, label: "Turbo" }
+      turbo: { chunkSize: 220, frameInterval: 140, repeatCount: 1, label: "Turbo" },
+      ultra: { chunkSize: 92, frameInterval: 100, repeatCount: 1, label: "Ultra RGB", colorGrid: true }
     };
+
+    const ULTRA_GRID_SIZE = 18;
+    const ULTRA_FRAME_BYTES = ULTRA_GRID_SIZE * ULTRA_GRID_SIZE;
+    const ULTRA_DATA_BYTES = ULTRA_FRAME_BYTES - 4;
 
     let txPackets = [];
     let txIndex = 0;
@@ -397,6 +403,13 @@
       };
 
       txPackets = buildPackets(base64, txPayload);
+      if (txProfileConfig.colorGrid && !validateUltraPackets(txPackets)) {
+        txPackets = [];
+        txPayload = null;
+        alert("El modo Ultra no admite este archivo con el tamano o nombre actual. Prueba con un nombre mas corto o usa otro perfil.");
+        renderIdleCanvas();
+        return;
+      }
       txIndex = 0;
 
       txFileName.textContent = file.name;
@@ -458,7 +471,7 @@
       lastAcceptedPacketKey = "";
       currentReception = resetReceptionState();
       downloadArea.innerHTML = "";
-      rxFileName.textContent = "Esperando QR...";
+      rxFileName.textContent = "Esperando patron...";
       rxChunkInfo.textContent = "0 / 0";
       rxSession.textContent = "Sin datos";
       rxProgress.style.width = "0%";
@@ -474,7 +487,7 @@
         video.srcObject = mediaStream;
         await video.play();
         rxState.textContent = "Escaneando";
-        output.textContent = "Camara activa. Apunta al QR del emisor.";
+        output.textContent = "Camara activa. Apunta al patron del emisor y mantenlo centrado.";
         scanLoop();
       } catch (error) {
         console.error(error);
@@ -509,7 +522,7 @@
       }
 
       const now = performance.now();
-      const scanInterval = currentReception.profile === "turbo" ? 60 : 90;
+      const scanInterval = currentReception.profile === "turbo" ? 60 : currentReception.profile === "ultra" ? 45 : 90;
       if (now - lastScanAt < scanInterval) {
         scanFrameId = requestAnimationFrame(scanLoop);
         return;
@@ -524,26 +537,24 @@
       captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
 
       const imageData = captureCtx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
+
+      if (attemptUltraDecode(imageData)) {
+        scanFrameId = requestAnimationFrame(scanLoop);
+        return;
+      }
+
       const code = jsQR(imageData.data, imageData.width, imageData.height, {
         inversionAttempts: "attemptBoth"
       });
 
       if (code && code.data) {
-        handleDecodedPacket(code.data);
+        handleDecodedPacket(parsePacketString(code.data));
       }
 
       scanFrameId = requestAnimationFrame(scanLoop);
     }
 
-    function handleDecodedPacket(rawPayload) {
-      let packet;
-
-      try {
-        packet = JSON.parse(rawPayload);
-      } catch {
-        return;
-      }
-
+    function handleDecodedPacket(packet) {
       if (!packet || typeof packet !== "object") {
         return;
       }
@@ -648,6 +659,11 @@
     }
 
     function renderPacketFrame(packet) {
+      if (packet.p === "ultra") {
+        renderUltraFrame(packet);
+        return;
+      }
+
       const ctx = txCanvas.getContext("2d");
       ctx.clearRect(0, 0, txCanvas.width, txCanvas.height);
 
@@ -662,6 +678,36 @@
       ctx.fillStyle = "#08131f";
       ctx.font = "bold 13px Segoe UI";
       ctx.fillText(packet.p.toUpperCase(), 28, 28);
+    }
+
+    function renderUltraFrame(packet) {
+      const ctx = txCanvas.getContext("2d");
+      const bytes = encodeUltraPacket(packet);
+      const boardSize = 360;
+      const boardX = 50;
+      const boardY = 50;
+      const cell = boardSize / ULTRA_GRID_SIZE;
+
+      ctx.clearRect(0, 0, txCanvas.width, txCanvas.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, txCanvas.width, txCanvas.height);
+
+      drawLocatorFrame(ctx);
+
+      for (let row = 0; row < ULTRA_GRID_SIZE; row += 1) {
+        for (let col = 0; col < ULTRA_GRID_SIZE; col += 1) {
+          const value = bytes[row * ULTRA_GRID_SIZE + col];
+          ctx.fillStyle = byteToRgb332(value);
+          ctx.fillRect(boardX + col * cell, boardY + row * cell, Math.ceil(cell), Math.ceil(cell));
+        }
+      }
+
+      ctx.strokeStyle = "#08131f";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(boardX, boardY, boardSize, boardSize);
+      ctx.fillStyle = "#08131f";
+      ctx.font = "bold 13px Segoe UI";
+      ctx.fillText("ULTRA RGB 8-BIT", 28, 28);
     }
 
     function drawLocatorFrame(ctx) {
@@ -698,7 +744,7 @@
       ctx.font = "bold 28px Segoe UI";
       ctx.fillText("Optical File Transfer", 52, 180);
       ctx.font = "18px Segoe UI";
-      ctx.fillText("Selecciona un archivo para generar QR.", 68, 230);
+      ctx.fillText("Selecciona un archivo para generar patrones.", 52, 230);
       ctx.strokeStyle = "#89c7ff";
       ctx.lineWidth = 3;
       ctx.strokeRect(48, 48, txCanvas.width - 96, txCanvas.height - 96);
@@ -769,6 +815,100 @@
       }
 
       return hash.toString(36);
+    }
+
+    function parsePacketString(rawPayload) {
+      try {
+        return JSON.parse(rawPayload);
+      } catch {
+        return null;
+      }
+    }
+
+    function validateUltraPackets(packets) {
+      return packets.every((packet) => new TextEncoder().encode(JSON.stringify(packet)).length <= ULTRA_DATA_BYTES);
+    }
+
+    function encodeUltraPacket(packet) {
+      const payloadBytes = new TextEncoder().encode(JSON.stringify(packet));
+      const frameBytes = new Uint8Array(ULTRA_FRAME_BYTES);
+      const size = Math.min(payloadBytes.length, ULTRA_DATA_BYTES);
+
+      frameBytes[0] = 79;
+      frameBytes[1] = 70;
+      frameBytes[2] = size >> 8;
+      frameBytes[3] = size & 255;
+      frameBytes.set(payloadBytes.slice(0, size), 4);
+
+      return frameBytes;
+    }
+
+    function attemptUltraDecode(imageData) {
+      const packet = decodeUltraPacketFromImage(imageData);
+      if (!packet) {
+        return false;
+      }
+
+      handleDecodedPacket(packet);
+      return true;
+    }
+
+    function decodeUltraPacketFromImage(imageData) {
+      const bytes = sampleUltraBytes(imageData);
+      if (!bytes || bytes[0] !== 79 || bytes[1] !== 70) {
+        return null;
+      }
+
+      const length = (bytes[2] << 8) | bytes[3];
+      if (length <= 0 || length > ULTRA_DATA_BYTES) {
+        return null;
+      }
+
+      try {
+        const json = new TextDecoder().decode(bytes.slice(4, 4 + length));
+        const packet = JSON.parse(json);
+        return packet && packet.p === "ultra" ? packet : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function sampleUltraBytes(imageData) {
+      const { data, width, height } = imageData;
+      const side = Math.min(width, height);
+      const boardSize = side * 0.78;
+      const startX = Math.floor((width - boardSize) / 2);
+      const startY = Math.floor((height - boardSize) / 2);
+      const cell = boardSize / ULTRA_GRID_SIZE;
+      const bytes = new Uint8Array(ULTRA_FRAME_BYTES);
+
+      for (let row = 0; row < ULTRA_GRID_SIZE; row += 1) {
+        for (let col = 0; col < ULTRA_GRID_SIZE; col += 1) {
+          const sampleX = Math.max(0, Math.min(width - 1, Math.floor(startX + (col + 0.5) * cell)));
+          const sampleY = Math.max(0, Math.min(height - 1, Math.floor(startY + (row + 0.5) * cell)));
+          const pixelIndex = (sampleY * width + sampleX) * 4;
+          const r = data[pixelIndex];
+          const g = data[pixelIndex + 1];
+          const b = data[pixelIndex + 2];
+          bytes[row * ULTRA_GRID_SIZE + col] = rgbToByte332(r, g, b);
+        }
+      }
+
+      return bytes;
+    }
+
+    function byteToRgb332(value) {
+      const r = Math.round(((value >> 5) & 7) * 255 / 7);
+      const g = Math.round(((value >> 2) & 7) * 255 / 7);
+      const b = Math.round((value & 3) * 255 / 3);
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    function rgbToByte332(r, g, b) {
+      const rPart = Math.max(0, Math.min(7, Math.round(r * 7 / 255)));
+      const gPart = Math.max(0, Math.min(7, Math.round(g * 7 / 255)));
+      const bPart = Math.max(0, Math.min(3, Math.round(b * 3 / 255)));
+      return (rPart << 5) | (gPart << 2) | bPart;
     }
   </script>
 </body>
