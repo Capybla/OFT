@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Optical File Transfer</title>
+<script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<style>
+  :root {
+    --bg: #07111f;
+    --bg-soft: #0d1b2d;
+    --panel: rgba(11, 26, 42, 0.9);
+    --line: rgba(143, 197, 255, 0.24);
+    --text: #edf6ff;
+    --muted: #9db8d4;
+    --accent: #7cf0c9;
+    --accent-strong: #2de0a7;
+    --danger: #ff8585;
+    --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(circle at top, rgba(71, 165, 255, 0.18), transparent 38%),
+      linear-gradient(180deg, #06101b 0%, #0a1626 52%, #08101b 100%);
+  }
+
+  .shell {
+    width: min(1180px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 28px 0 40px;
+  }
+
+  .hero {
+    margin-bottom: 24px;
+    padding: 28px;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: linear-gradient(145deg, rgba(12, 31, 50, 0.94), rgba(8, 19, 32, 0.88));
+    box-shadow: var(--shadow);
+  }
+
+  .hero h1 {
+    margin: 0 0 8px;
+    font-size: clamp(2rem, 5vw, 3.8rem);
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .hero p {
+    margin: 0;
+    max-width: 760px;
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  .panel {
+    padding: 22px;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(12px);
+  }
+
+  h2 {
+    margin: 0 0 10px;
+    font-size: 1.1rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .subtle {
+    margin: 0 0 18px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  input[type="file"],
+  button,
+  select {
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    padding: 12px 14px;
+    font: inherit;
+  }
+
+  input[type="file"] {
+    min-width: min(100%, 320px);
+  }
+
+  button {
+    cursor: pointer;
+    transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  }
+
+  button:hover {
+    transform: translateY(-1px);
+    border-color: rgba(124, 240, 201, 0.6);
+  }
+
+  button.primary {
+    background: linear-gradient(135deg, rgba(45, 224, 167, 0.28), rgba(124, 240, 201, 0.12));
+    border-color: rgba(124, 240, 201, 0.45);
+  }
+
+  button.danger {
+    border-color: rgba(255, 133, 133, 0.45);
+    color: #ffd3d3;
+  }
+
+  .stage {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    max-width: 460px;
+    margin: 0 auto;
+    border-radius: 22px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    background:
+      linear-gradient(135deg, rgba(124, 240, 201, 0.06), rgba(71, 165, 255, 0.08)),
+      #07101b;
+  }
+
+  canvas,
+  video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #fff;
+  }
+
+  .meta,
+  .receiver-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 18px;
+  }
+
+  .stat {
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .value {
+    font-size: 0.98rem;
+    word-break: break-word;
+  }
+
+  .status {
+    margin-top: 16px;
+    min-height: 24px;
+    color: var(--muted);
+  }
+
+  .progress {
+    width: 100%;
+    height: 10px;
+    margin-top: 14px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .bar {
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent-strong), #8cc8ff);
+    transition: width 0.18s ease;
+  }
+
+  #downloadArea {
+    margin-top: 16px;
+  }
+
+  #downloadArea a {
+    color: var(--accent);
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <h1>Optical File Transfer</h1>
+      <p>
+        Transfiere archivos mostrando codigos QR en pantalla y reconstruyendolos desde otra camara.
+        La pagina es estatica, asi que puede publicarse en GitHub Pages o cualquier hosting simple.
+      </p>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Emisor</h2>
+        <p class="subtle">Selecciona un archivo y la pagina lo fragmentara en QR consecutivos para que otro dispositivo pueda escanearlos.</p>
+        <div class="controls">
+          <input type="file" id="fileInput">
+          <button class="primary" id="transmitBtn">Iniciar transmision</button>
+          <button class="danger" id="stopTransmitBtn">Detener</button>
+        </div>
+        <div class="stage">
+          <canvas id="txCanvas" width="460" height="460"></canvas>
+        </div>
+        <div class="meta">
+          <div class="stat">
+            <span class="label">Archivo</span>
+            <span class="value" id="txFileName">Sin seleccionar</span>
+          </div>
+          <div class="stat">
+            <span class="label">Bloque actual</span>
+            <span class="value" id="txChunkInfo">0 / 0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Tamano</span>
+            <span class="value" id="txFileSize">0 B</span>
+          </div>
+          <div class="stat">
+            <span class="label">Sesion</span>
+            <span class="value" id="txSession">No iniciada</span>
+          </div>
+        </div>
+        <div class="progress"><div class="bar" id="txProgress"></div></div>
+        <div class="status" id="txStatus">Listo para transmitir.</div>
+      </article>
+
+      <article class="panel">
+        <h2>Receptor</h2>
+        <p class="subtle">Abre la camara, apunta a la pantalla del emisor y la pagina ira capturando bloques hasta reconstruir el archivo.</p>
+        <div class="controls">
+          <button class="primary" id="startCameraBtn">Abrir camara</button>
+          <button class="danger" id="stopCameraBtn">Cerrar camara</button>
+        </div>
+        <div class="stage">
+          <video id="video" autoplay playsinline muted></video>
+        </div>
+        <div class="receiver-meta">
+          <div class="stat">
+            <span class="label">Archivo detectado</span>
+            <span class="value" id="rxFileName">Esperando QR...</span>
+          </div>
+          <div class="stat">
+            <span class="label">Progreso</span>
+            <span class="value" id="rxChunkInfo">0 / 0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Estado</span>
+            <span class="value" id="rxState">Camara inactiva</span>
+          </div>
+          <div class="stat">
+            <span class="label">Ultima sesion</span>
+            <span class="value" id="rxSession">Sin datos</span>
+          </div>
+        </div>
+        <div class="progress"><div class="bar" id="rxProgress"></div></div>
+        <div class="status" id="output">Todavia no se ha recibido ningun archivo.</div>
+        <div id="downloadArea"></div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const txCanvas = document.getElementById("txCanvas");
+    const video = document.getElementById("video");
+    const txStatus = document.getElementById("txStatus");
+    const output = document.getElementById("output");
+    const downloadArea = document.getElementById("downloadArea");
+
+    const txFileName = document.getElementById("txFileName");
+    const txFileSize = document.getElementById("txFileSize");
+    const txChunkInfo = document.getElementById("txChunkInfo");
+    const txSession = document.getElementById("txSession");
+    const txProgress = document.getElementById("txProgress");
+
+    const rxFileName = document.getElementById("rxFileName");
+    const rxChunkInfo = document.getElementById("rxChunkInfo");
+    const rxState = document.getElementById("rxState");
+    const rxSession = document.getElementById("rxSession");
+    const rxProgress = document.getElementById("rxProgress");
+
+    const qr = new QRious({
+      element: txCanvas,
+      size: 460,
+      value: "Optical File Transfer"
+    });
+
+    const CHUNK_SIZE = 180;
+    const FRAME_INTERVAL = 240;
+
+    let txPackets = [];
+    let txIndex = 0;
+    let txTimer = null;
+    let txPayload = null;
+
+    let mediaStream = null;
+    let scanFrameId = null;
+    let lastDecodedPayload = "";
+    let currentReception = resetReceptionState();
+
+    document.getElementById("transmitBtn").addEventListener("click", startTransmit);
+    document.getElementById("stopTransmitBtn").addEventListener("click", stopTransmit);
+    document.getElementById("startCameraBtn").addEventListener("click", startCamera);
+    document.getElementById("stopCameraBtn").addEventListener("click", stopCamera);
+
+    renderIdleCanvas();
+
+    async function startTransmit() {
+      const file = fileInput.files[0];
+      if (!file) {
+        alert("Selecciona un archivo antes de iniciar la transmision.");
+        return;
+      }
+
+      stopTransmit(false);
+
+      const buffer = await file.arrayBuffer();
+      const base64 = arrayBufferToBase64(buffer);
+      const sessionId = createSessionId();
+      const totalChunks = Math.ceil(base64.length / CHUNK_SIZE);
+
+      txPayload = {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || "application/octet-stream",
+        sessionId,
+        totalChunks
+      };
+
+      txPackets = buildPackets(base64, txPayload);
+      txIndex = 0;
+
+      txFileName.textContent = file.name;
+      txFileSize.textContent = formatBytes(file.size);
+      txSession.textContent = sessionId;
+      txStatus.textContent = `Transmitiendo ${totalChunks} bloques en bucle.`;
+
+      drawCurrentPacket();
+      txTimer = setInterval(() => {
+        txIndex = (txIndex + 1) % txPackets.length;
+        drawCurrentPacket();
+      }, FRAME_INTERVAL);
+    }
+
+    function stopTransmit(showMessage = true) {
+      if (txTimer) {
+        clearInterval(txTimer);
+        txTimer = null;
+      }
+
+      txPackets = [];
+      txIndex = 0;
+
+      txPayload = null;
+      txChunkInfo.textContent = "0 / 0";
+      txProgress.style.width = "0%";
+
+      if (showMessage) {
+        txStatus.textContent = "Transmision detenida.";
+      }
+
+      renderIdleCanvas();
+    }
+
+    function drawCurrentPacket() {
+      if (!txPackets.length) {
+        renderIdleCanvas();
+        return;
+      }
+
+      const packet = txPackets[txIndex];
+      qr.value = JSON.stringify(packet);
+
+      const ctx = txCanvas.getContext("2d");
+      ctx.save();
+      ctx.fillStyle = "rgba(255,255,255,0.88)";
+      ctx.fillRect(0, 408, txCanvas.width, 52);
+      ctx.fillStyle = "#08131f";
+      ctx.font = "bold 16px Segoe UI";
+      ctx.fillText(`Sesion ${packet.sid}  |  Bloque ${packet.i + 1}/${packet.t}`, 18, 438);
+      ctx.restore();
+
+      txChunkInfo.textContent = `${packet.i + 1} / ${packet.t}`;
+      txProgress.style.width = `${((packet.i + 1) / packet.t) * 100}%`;
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        output.textContent = "Este navegador no permite acceder a la camara.";
+        rxState.textContent = "No compatible";
+        return;
+      }
+
+      stopCamera(false);
+      lastDecodedPayload = "";
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" }
+          },
+          audio: false
+        });
+
+        video.srcObject = mediaStream;
+        await video.play();
+        rxState.textContent = "Escaneando";
+        output.textContent = "Camara activa. Apunta al QR del emisor.";
+        scanLoop();
+      } catch (error) {
+        console.error(error);
+        output.textContent = "No fue posible abrir la camara. Revisa permisos del navegador.";
+        rxState.textContent = "Error";
+      }
+    }
+
+    function stopCamera(showMessage = true) {
+      if (scanFrameId) {
+        cancelAnimationFrame(scanFrameId);
+        scanFrameId = null;
+      }
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+      }
+
+      video.srcObject = null;
+
+      if (showMessage) {
+        rxState.textContent = "Camara inactiva";
+        output.textContent = "Camara detenida.";
+      }
+    }
+
+    function scanLoop() {
+      if (!mediaStream || video.readyState < 2) {
+        scanFrameId = requestAnimationFrame(scanLoop);
+        return;
+      }
+
+      const captureCanvas = document.createElement("canvas");
+      captureCanvas.width = video.videoWidth;
+      captureCanvas.height = video.videoHeight;
+      const captureCtx = captureCanvas.getContext("2d", { willReadFrequently: true });
+      captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+
+      const imageData = captureCtx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "attemptBoth"
+      });
+
+      if (code && code.data && code.data !== lastDecodedPayload) {
+        lastDecodedPayload = code.data;
+        handleDecodedPacket(code.data);
+      }
+
+      scanFrameId = requestAnimationFrame(scanLoop);
+    }
+
+    function handleDecodedPacket(rawPayload) {
+      let packet;
+
+      try {
+        packet = JSON.parse(rawPayload);
+      } catch {
+        return;
+      }
+
+      if (!packet || typeof packet !== "object") {
+        return;
+      }
+
+      const requiredKeys = ["sid", "n", "t", "i", "d"];
+      const isValid = requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(packet, key));
+      if (!isValid) {
+        return;
+      }
+
+      if (currentReception.sessionId && currentReception.sessionId !== packet.sid) {
+        currentReception = resetReceptionState();
+        downloadArea.innerHTML = "";
+      }
+
+      if (!currentReception.sessionId) {
+        currentReception.sessionId = packet.sid;
+        currentReception.totalChunks = packet.t;
+        currentReception.fileName = packet.n;
+        currentReception.fileSize = packet.s;
+        currentReception.mimeType = packet.m || "application/octet-stream";
+        currentReception.chunks = new Array(packet.t);
+        currentReception.seen = new Set();
+      }
+
+      rxFileName.textContent = currentReception.fileName;
+      rxSession.textContent = currentReception.sessionId;
+      rxState.textContent = "Recibiendo";
+
+      if (!currentReception.seen.has(packet.i)) {
+        currentReception.seen.add(packet.i);
+        currentReception.chunks[packet.i] = packet.d;
+      }
+
+      const received = currentReception.seen.size;
+      rxChunkInfo.textContent = `${received} / ${currentReception.totalChunks}`;
+      rxProgress.style.width = `${(received / currentReception.totalChunks) * 100}%`;
+      output.textContent = `Recibiendo ${received} de ${currentReception.totalChunks} bloques del archivo ${currentReception.fileName}.`;
+
+      if (received === currentReception.totalChunks) {
+        reconstructFile();
+      }
+    }
+
+    function reconstructFile() {
+      try {
+        const base64 = currentReception.chunks.join("");
+        const bytes = base64ToUint8Array(base64);
+        const blob = new Blob([bytes], { type: currentReception.mimeType });
+        const url = URL.createObjectURL(blob);
+
+        downloadArea.innerHTML = "";
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = currentReception.fileName || "archivo_recibido";
+        link.textContent = `Descargar ${link.download}`;
+        downloadArea.appendChild(link);
+
+        rxState.textContent = "Completado";
+        output.textContent = `Transferencia completa: ${currentReception.fileName} (${formatBytes(currentReception.fileSize || bytes.length)}).`;
+      } catch (error) {
+        console.error("Error reconstruyendo archivo", error);
+        rxState.textContent = "Error";
+        output.textContent = "Se recibieron bloques, pero no se pudo reconstruir el archivo.";
+      }
+    }
+
+    function buildPackets(base64, meta) {
+      const packets = [];
+
+      for (let offset = 0, packetIndex = 0; offset < base64.length; offset += CHUNK_SIZE, packetIndex += 1) {
+        packets.push({
+          sid: meta.sessionId,
+          n: meta.fileName,
+          s: meta.fileSize,
+          m: meta.mimeType,
+          t: meta.totalChunks,
+          i: packetIndex,
+          d: base64.slice(offset, offset + CHUNK_SIZE)
+        });
+      }
+
+      return packets;
+    }
+
+    function renderIdleCanvas() {
+      const ctx = txCanvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, txCanvas.width, txCanvas.height);
+      ctx.fillStyle = "#08131f";
+      ctx.font = "bold 28px Segoe UI";
+      ctx.fillText("Optical File Transfer", 52, 180);
+      ctx.font = "18px Segoe UI";
+      ctx.fillText("Selecciona un archivo para generar QR.", 68, 230);
+      ctx.strokeStyle = "#89c7ff";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(48, 48, txCanvas.width - 96, txCanvas.height - 96);
+    }
+
+    function resetReceptionState() {
+      return {
+        sessionId: "",
+        fileName: "",
+        fileSize: 0,
+        mimeType: "application/octet-stream",
+        totalChunks: 0,
+        chunks: [],
+        seen: new Set()
+      };
+    }
+
+    function createSessionId() {
+      return Math.random().toString(36).slice(2, 8).toUpperCase();
+    }
+
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      const chunk = 0x8000;
+      let binary = "";
+
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+
+      return btoa(binary);
+    }
+
+    function base64ToUint8Array(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      return bytes;
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) {
+        return "0 B";
+      }
+
+      const units = ["B", "KB", "MB", "GB"];
+      let value = bytes;
+      let unitIndex = 0;
+
+      while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+      }
+
+      return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+    }
+  </script>
+</body>
+</html>
