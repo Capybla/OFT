@@ -242,6 +242,11 @@
         <p class="subtle">Selecciona un archivo y la pagina lo fragmentara en QR consecutivos para que otro dispositivo pueda escanearlos.</p>
         <div class="controls">
           <input type="file" id="fileInput">
+          <select id="txProfile">
+            <option value="balanced">Balanceado</option>
+            <option value="robust">Robusto</option>
+            <option value="turbo">Turbo</option>
+          </select>
           <button class="primary" id="transmitBtn">Iniciar transmision</button>
           <button class="danger" id="stopTransmitBtn">Detener</button>
         </div>
@@ -308,6 +313,7 @@
   <script>
     const fileInput = document.getElementById("fileInput");
     const txCanvas = document.getElementById("txCanvas");
+    const txProfile = document.getElementById("txProfile");
     const video = document.getElementById("video");
     const txStatus = document.getElementById("txStatus");
     const output = document.getElementById("output");
@@ -325,23 +331,38 @@
     const rxSession = document.getElementById("rxSession");
     const rxProgress = document.getElementById("rxProgress");
 
+    const captureCanvas = document.createElement("canvas");
+    const captureCtx = captureCanvas.getContext("2d", { willReadFrequently: true });
+    const qrSourceCanvas = document.createElement("canvas");
+    qrSourceCanvas.width = 360;
+    qrSourceCanvas.height = 360;
+
     const qr = new QRious({
-      element: txCanvas,
-      size: 460,
-      value: "Optical File Transfer"
+      element: qrSourceCanvas,
+      size: 360,
+      value: "Optical File Transfer",
+      level: "H",
+      padding: 20,
+      foreground: "#000000",
+      background: "#ffffff"
     });
 
-    const CHUNK_SIZE = 180;
-    const FRAME_INTERVAL = 240;
+    const TX_PROFILES = {
+      robust: { chunkSize: 110, frameInterval: 320, repeatCount: 3, label: "Robusto" },
+      balanced: { chunkSize: 160, frameInterval: 220, repeatCount: 2, label: "Balanceado" },
+      turbo: { chunkSize: 220, frameInterval: 140, repeatCount: 1, label: "Turbo" }
+    };
 
     let txPackets = [];
     let txIndex = 0;
     let txTimer = null;
     let txPayload = null;
+    let txProfileConfig = TX_PROFILES.balanced;
 
     let mediaStream = null;
     let scanFrameId = null;
-    let lastDecodedPayload = "";
+    let lastScanAt = 0;
+    let lastAcceptedPacketKey = "";
     let currentReception = resetReceptionState();
 
     document.getElementById("transmitBtn").addEventListener("click", startTransmit);
@@ -363,14 +384,16 @@
       const buffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(buffer);
       const sessionId = createSessionId();
-      const totalChunks = Math.ceil(base64.length / CHUNK_SIZE);
+      txProfileConfig = TX_PROFILES[txProfile.value] || TX_PROFILES.balanced;
+      const totalChunks = Math.ceil(base64.length / txProfileConfig.chunkSize);
 
       txPayload = {
         fileName: file.name,
         fileSize: file.size,
         mimeType: file.type || "application/octet-stream",
         sessionId,
-        totalChunks
+        totalChunks,
+        profile: txProfile.value
       };
 
       txPackets = buildPackets(base64, txPayload);
@@ -378,14 +401,14 @@
 
       txFileName.textContent = file.name;
       txFileSize.textContent = formatBytes(file.size);
-      txSession.textContent = sessionId;
-      txStatus.textContent = `Transmitiendo ${totalChunks} bloques en bucle.`;
+      txSession.textContent = `${sessionId} (${txProfileConfig.label})`;
+      txStatus.textContent = `Transmitiendo ${totalChunks} bloques en modo ${txProfileConfig.label}.`;
 
       drawCurrentPacket();
       txTimer = setInterval(() => {
         txIndex = (txIndex + 1) % txPackets.length;
         drawCurrentPacket();
-      }, FRAME_INTERVAL);
+      }, txProfileConfig.frameInterval);
     }
 
     function stopTransmit(showMessage = true) {
@@ -398,6 +421,7 @@
       txIndex = 0;
 
       txPayload = null;
+      txProfileConfig = TX_PROFILES[txProfile.value] || TX_PROFILES.balanced;
       txChunkInfo.textContent = "0 / 0";
       txProgress.style.width = "0%";
 
@@ -415,11 +439,11 @@
       }
 
       const packet = txPackets[txIndex];
-      qr.value = JSON.stringify(packet);
+      renderPacketFrame(packet);
 
       txChunkInfo.textContent = `${packet.i + 1} / ${packet.t}`;
       txProgress.style.width = `${((packet.i + 1) / packet.t) * 100}%`;
-      txStatus.textContent = `Transmitiendo sesion ${packet.sid}. Bloque ${packet.i + 1} de ${packet.t}.`;
+      txStatus.textContent = `Transmitiendo sesion ${packet.sid}. Bloque ${packet.i + 1} de ${packet.t}. Repeticion ${packet.r + 1}/${packet.rc}.`;
     }
 
     async function startCamera() {
@@ -430,7 +454,14 @@
       }
 
       stopCamera(false);
-      lastDecodedPayload = "";
+      lastScanAt = 0;
+      lastAcceptedPacketKey = "";
+      currentReception = resetReceptionState();
+      downloadArea.innerHTML = "";
+      rxFileName.textContent = "Esperando QR...";
+      rxChunkInfo.textContent = "0 / 0";
+      rxSession.textContent = "Sin datos";
+      rxProgress.style.width = "0%";
 
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -477,10 +508,19 @@
         return;
       }
 
-      const captureCanvas = document.createElement("canvas");
-      captureCanvas.width = video.videoWidth;
-      captureCanvas.height = video.videoHeight;
-      const captureCtx = captureCanvas.getContext("2d", { willReadFrequently: true });
+      const now = performance.now();
+      const scanInterval = currentReception.profile === "turbo" ? 60 : 90;
+      if (now - lastScanAt < scanInterval) {
+        scanFrameId = requestAnimationFrame(scanLoop);
+        return;
+      }
+      lastScanAt = now;
+
+      if (captureCanvas.width !== video.videoWidth || captureCanvas.height !== video.videoHeight) {
+        captureCanvas.width = video.videoWidth;
+        captureCanvas.height = video.videoHeight;
+      }
+
       captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
 
       const imageData = captureCtx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
@@ -488,8 +528,7 @@
         inversionAttempts: "attemptBoth"
       });
 
-      if (code && code.data && code.data !== lastDecodedPayload) {
-        lastDecodedPayload = code.data;
+      if (code && code.data) {
         handleDecodedPacket(code.data);
       }
 
@@ -515,6 +554,16 @@
         return;
       }
 
+      if (packet.c !== checksum(packet.d)) {
+        return;
+      }
+
+      const packetKey = `${packet.sid}:${packet.i}:${packet.r}`;
+      if (packetKey === lastAcceptedPacketKey) {
+        return;
+      }
+      lastAcceptedPacketKey = packetKey;
+
       if (currentReception.sessionId && currentReception.sessionId !== packet.sid) {
         currentReception = resetReceptionState();
         downloadArea.innerHTML = "";
@@ -526,6 +575,7 @@
         currentReception.fileName = packet.n;
         currentReception.fileSize = packet.s;
         currentReception.mimeType = packet.m || "application/octet-stream";
+        currentReception.profile = packet.p || "balanced";
         currentReception.chunks = new Array(packet.t);
         currentReception.seen = new Set();
       }
@@ -575,19 +625,69 @@
     function buildPackets(base64, meta) {
       const packets = [];
 
-      for (let offset = 0, packetIndex = 0; offset < base64.length; offset += CHUNK_SIZE, packetIndex += 1) {
-        packets.push({
-          sid: meta.sessionId,
-          n: meta.fileName,
-          s: meta.fileSize,
-          m: meta.mimeType,
-          t: meta.totalChunks,
-          i: packetIndex,
-          d: base64.slice(offset, offset + CHUNK_SIZE)
-        });
+      for (let offset = 0, packetIndex = 0; offset < base64.length; offset += txProfileConfig.chunkSize, packetIndex += 1) {
+        const chunk = base64.slice(offset, offset + txProfileConfig.chunkSize);
+        for (let repeatIndex = 0; repeatIndex < txProfileConfig.repeatCount; repeatIndex += 1) {
+          packets.push({
+            sid: meta.sessionId,
+            n: meta.fileName,
+            s: meta.fileSize,
+            m: meta.mimeType,
+            p: meta.profile,
+            t: meta.totalChunks,
+            i: packetIndex,
+            r: repeatIndex,
+            rc: txProfileConfig.repeatCount,
+            c: checksum(chunk),
+            d: chunk
+          });
+        }
       }
 
       return packets;
+    }
+
+    function renderPacketFrame(packet) {
+      const ctx = txCanvas.getContext("2d");
+      ctx.clearRect(0, 0, txCanvas.width, txCanvas.height);
+
+      ctx.fillStyle = "#f7fbff";
+      ctx.fillRect(0, 0, txCanvas.width, txCanvas.height);
+
+      drawLocatorFrame(ctx);
+
+      qr.value = JSON.stringify(packet);
+      ctx.drawImage(qrSourceCanvas, 50, 50, 360, 360);
+
+      ctx.fillStyle = "#08131f";
+      ctx.font = "bold 13px Segoe UI";
+      ctx.fillText(packet.p.toUpperCase(), 28, 28);
+    }
+
+    function drawLocatorFrame(ctx) {
+      ctx.save();
+      ctx.strokeStyle = "#08131f";
+      ctx.lineWidth = 18;
+      ctx.strokeRect(24, 24, txCanvas.width - 48, txCanvas.height - 48);
+
+      const corners = [
+        [24, 24],
+        [txCanvas.width - 24, 24],
+        [24, txCanvas.height - 24],
+        [txCanvas.width - 24, txCanvas.height - 24]
+      ];
+
+      corners.forEach(([x, y], index) => {
+        ctx.beginPath();
+        ctx.fillStyle = index % 2 === 0 ? "#10d39b" : "#1593ff";
+        ctx.arc(x, y, 18, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      ctx.strokeStyle = "#10d39b";
+      ctx.lineWidth = 6;
+      ctx.strokeRect(38, 38, txCanvas.width - 76, txCanvas.height - 76);
+      ctx.restore();
     }
 
     function renderIdleCanvas() {
@@ -610,6 +710,7 @@
         fileName: "",
         fileSize: 0,
         mimeType: "application/octet-stream",
+        profile: "balanced",
         totalChunks: 0,
         chunks: [],
         seen: new Set()
@@ -658,6 +759,16 @@
       }
 
       return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+    }
+
+    function checksum(text) {
+      let hash = 0;
+
+      for (let i = 0; i < text.length; i += 1) {
+        hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+      }
+
+      return hash.toString(36);
     }
   </script>
 </body>
