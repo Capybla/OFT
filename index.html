@@ -417,17 +417,9 @@
       const packet = txPackets[txIndex];
       qr.value = JSON.stringify(packet);
 
-      const ctx = txCanvas.getContext("2d");
-      ctx.save();
-      ctx.fillStyle = "rgba(255,255,255,0.88)";
-      ctx.fillRect(0, 408, txCanvas.width, 52);
-      ctx.fillStyle = "#08131f";
-      ctx.font = "bold 16px Segoe UI";
-      ctx.fillText(`Sesion ${packet.sid}  |  Bloque ${packet.i + 1}/${packet.t}`, 18, 438);
-      ctx.restore();
-
       txChunkInfo.textContent = `${packet.i + 1} / ${packet.t}`;
       txProgress.style.width = `${((packet.i + 1) / packet.t) * 100}%`;
+      txStatus.textContent = `Transmitiendo sesion ${packet.sid}. Bloque ${packet.i + 1} de ${packet.t}.`;
     }
 
     async function startCamera() {
