@@ -352,12 +352,22 @@
       robust: { chunkSize: 110, frameInterval: 320, repeatCount: 3, label: "Robusto" },
       balanced: { chunkSize: 160, frameInterval: 220, repeatCount: 2, label: "Balanceado" },
       turbo: { chunkSize: 220, frameInterval: 140, repeatCount: 1, label: "Turbo" },
-      ultra: { chunkSize: 92, frameInterval: 100, repeatCount: 1, label: "Ultra RGB", colorGrid: true }
+      ultra: { chunkSize: 72, frameInterval: 100, repeatCount: 1, label: "Ultra RGB", colorGrid: true }
     };
 
     const ULTRA_GRID_SIZE = 18;
     const ULTRA_FRAME_BYTES = ULTRA_GRID_SIZE * ULTRA_GRID_SIZE;
-    const ULTRA_DATA_BYTES = ULTRA_FRAME_BYTES - 4;
+    const ULTRA_ANCHOR_SIZE = 2;
+    const ULTRA_MAGIC = [79, 70];
+    const ULTRA_ANCHOR_VALUES = {
+      tl: 0xE0,
+      tr: 0x1C,
+      bl: 0x03,
+      br: 0xFF
+    };
+    const ULTRA_PAYLOAD_CELLS = ULTRA_FRAME_BYTES - 16;
+    const ULTRA_HEADER_BYTES = 5;
+    const ULTRA_DATA_BYTES = ULTRA_PAYLOAD_CELLS - ULTRA_HEADER_BYTES;
 
     let txPackets = [];
     let txIndex = 0;
@@ -831,14 +841,30 @@
 
     function encodeUltraPacket(packet) {
       const payloadBytes = new TextEncoder().encode(JSON.stringify(packet));
-      const frameBytes = new Uint8Array(ULTRA_FRAME_BYTES);
       const size = Math.min(payloadBytes.length, ULTRA_DATA_BYTES);
+      const packedBytes = new Uint8Array(ULTRA_PAYLOAD_CELLS);
+      const frameBytes = new Uint8Array(ULTRA_FRAME_BYTES);
 
-      frameBytes[0] = 79;
-      frameBytes[1] = 70;
-      frameBytes[2] = size >> 8;
-      frameBytes[3] = size & 255;
-      frameBytes.set(payloadBytes.slice(0, size), 4);
+      packedBytes[0] = ULTRA_MAGIC[0];
+      packedBytes[1] = ULTRA_MAGIC[1];
+      packedBytes[2] = size >> 8;
+      packedBytes[3] = size & 255;
+      packedBytes[4] = checksumBytes(payloadBytes.slice(0, size));
+      packedBytes.set(payloadBytes.slice(0, size), ULTRA_HEADER_BYTES);
+
+      let payloadIndex = 0;
+      for (let row = 0; row < ULTRA_GRID_SIZE; row += 1) {
+        for (let col = 0; col < ULTRA_GRID_SIZE; col += 1) {
+          const frameIndex = row * ULTRA_GRID_SIZE + col;
+          const anchorValue = getUltraAnchorValue(row, col);
+          if (anchorValue !== null) {
+            frameBytes[frameIndex] = anchorValue;
+          } else {
+            frameBytes[frameIndex] = packedBytes[payloadIndex];
+            payloadIndex += 1;
+          }
+        }
+      }
 
       return frameBytes;
     }
@@ -854,38 +880,52 @@
     }
 
     function decodeUltraPacketFromImage(imageData) {
-      const bytes = sampleUltraBytes(imageData);
-      if (!bytes || bytes[0] !== 79 || bytes[1] !== 70) {
-        return null;
+      const candidates = getUltraCandidateRegions(imageData.width, imageData.height);
+
+      for (const region of candidates) {
+        const bytes = sampleUltraBytes(imageData, region);
+        if (!validateUltraAnchors(bytes)) {
+          continue;
+        }
+
+        const payload = extractUltraPayload(bytes);
+        if (!payload || payload[0] !== ULTRA_MAGIC[0] || payload[1] !== ULTRA_MAGIC[1]) {
+          continue;
+        }
+
+        const length = (payload[2] << 8) | payload[3];
+        if (length <= 0 || length > ULTRA_DATA_BYTES) {
+          continue;
+        }
+
+        const dataBytes = payload.slice(ULTRA_HEADER_BYTES, ULTRA_HEADER_BYTES + length);
+        if (payload[4] !== checksumBytes(dataBytes)) {
+          continue;
+        }
+
+        try {
+          const json = new TextDecoder().decode(dataBytes);
+          const packet = JSON.parse(json);
+          if (packet && packet.p === "ultra") {
+            return packet;
+          }
+        } catch {
+          // ignore malformed candidate
+        }
       }
 
-      const length = (bytes[2] << 8) | bytes[3];
-      if (length <= 0 || length > ULTRA_DATA_BYTES) {
-        return null;
-      }
-
-      try {
-        const json = new TextDecoder().decode(bytes.slice(4, 4 + length));
-        const packet = JSON.parse(json);
-        return packet && packet.p === "ultra" ? packet : null;
-      } catch {
-        return null;
-      }
+      return null;
     }
 
-    function sampleUltraBytes(imageData) {
+    function sampleUltraBytes(imageData, region) {
       const { data, width, height } = imageData;
-      const side = Math.min(width, height);
-      const boardSize = side * 0.78;
-      const startX = Math.floor((width - boardSize) / 2);
-      const startY = Math.floor((height - boardSize) / 2);
-      const cell = boardSize / ULTRA_GRID_SIZE;
+      const cell = region.size / ULTRA_GRID_SIZE;
       const bytes = new Uint8Array(ULTRA_FRAME_BYTES);
 
       for (let row = 0; row < ULTRA_GRID_SIZE; row += 1) {
         for (let col = 0; col < ULTRA_GRID_SIZE; col += 1) {
-          const sampleX = Math.max(0, Math.min(width - 1, Math.floor(startX + (col + 0.5) * cell)));
-          const sampleY = Math.max(0, Math.min(height - 1, Math.floor(startY + (row + 0.5) * cell)));
+          const sampleX = Math.max(0, Math.min(width - 1, Math.floor(region.x + (col + 0.5) * cell)));
+          const sampleY = Math.max(0, Math.min(height - 1, Math.floor(region.y + (row + 0.5) * cell)));
           const pixelIndex = (sampleY * width + sampleX) * 4;
           const r = data[pixelIndex];
           const g = data[pixelIndex + 1];
@@ -909,6 +949,104 @@
       const gPart = Math.max(0, Math.min(7, Math.round(g * 7 / 255)));
       const bPart = Math.max(0, Math.min(3, Math.round(b * 3 / 255)));
       return (rPart << 5) | (gPart << 2) | bPart;
+    }
+
+    function getUltraAnchorValue(row, col) {
+      const max = ULTRA_GRID_SIZE - 1;
+      const inTop = row < ULTRA_ANCHOR_SIZE;
+      const inBottom = row >= ULTRA_GRID_SIZE - ULTRA_ANCHOR_SIZE;
+      const inLeft = col < ULTRA_ANCHOR_SIZE;
+      const inRight = col >= ULTRA_GRID_SIZE - ULTRA_ANCHOR_SIZE;
+
+      if (inTop && inLeft) return ULTRA_ANCHOR_VALUES.tl;
+      if (inTop && inRight) return ULTRA_ANCHOR_VALUES.tr;
+      if (inBottom && inLeft) return ULTRA_ANCHOR_VALUES.bl;
+      if (inBottom && inRight) return ULTRA_ANCHOR_VALUES.br;
+
+      return null;
+    }
+
+    function validateUltraAnchors(bytes) {
+      let matches = 0;
+      let total = 0;
+
+      for (let row = 0; row < ULTRA_GRID_SIZE; row += 1) {
+        for (let col = 0; col < ULTRA_GRID_SIZE; col += 1) {
+          const expected = getUltraAnchorValue(row, col);
+          if (expected === null) {
+            continue;
+          }
+
+          total += 1;
+          const actual = bytes[row * ULTRA_GRID_SIZE + col];
+          if (rgb332Distance(actual, expected) <= 1) {
+            matches += 1;
+          }
+        }
+      }
+
+      return matches >= total - 2;
+    }
+
+    function extractUltraPayload(bytes) {
+      const payload = new Uint8Array(ULTRA_PAYLOAD_CELLS);
+      let payloadIndex = 0;
+
+      for (let row = 0; row < ULTRA_GRID_SIZE; row += 1) {
+        for (let col = 0; col < ULTRA_GRID_SIZE; col += 1) {
+          if (getUltraAnchorValue(row, col) !== null) {
+            continue;
+          }
+
+          payload[payloadIndex] = bytes[row * ULTRA_GRID_SIZE + col];
+          payloadIndex += 1;
+        }
+      }
+
+      return payload;
+    }
+
+    function getUltraCandidateRegions(width, height) {
+      const side = Math.min(width, height);
+      const sizeFactors = [0.60, 0.66, 0.72, 0.78, 0.84];
+      const offsets = [-0.06, 0, 0.06];
+      const regions = [];
+
+      for (const factor of sizeFactors) {
+        const size = side * factor;
+        for (const offsetY of offsets) {
+          for (const offsetX of offsets) {
+            regions.push({
+              size,
+              x: Math.floor((width - size) / 2 + width * offsetX),
+              y: Math.floor((height - size) / 2 + height * offsetY)
+            });
+          }
+        }
+      }
+
+      return regions;
+    }
+
+    function checksumBytes(bytes) {
+      let sum = 0;
+
+      for (let i = 0; i < bytes.length; i += 1) {
+        sum = (sum + bytes[i]) & 255;
+      }
+
+      return sum;
+    }
+
+    function rgb332Distance(a, b) {
+      const ar = (a >> 5) & 7;
+      const ag = (a >> 2) & 7;
+      const ab = a & 3;
+      const br = (b >> 5) & 7;
+      const bg = (b >> 2) & 7;
+      const bb = b & 3;
+
+      return Math.abs(ar - br) + Math.abs(ag - bg) + Math.abs(ab - bb);
     }
   </script>
 </body>
